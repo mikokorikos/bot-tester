@@ -1,0 +1,263 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+enum WarnSeverity {
+  MINOR
+  MAJOR
+  CRITICAL
+}
+
+enum TicketType {
+  BUY
+  SELL
+  ROBUX
+  NITRO
+  DECOR
+  MM
+}
+
+enum TicketStatus {
+  OPEN
+  CONFIRMED
+  CLAIMED
+  CLOSED
+}
+
+enum TradeStatus {
+  PENDING
+  ACTIVE
+  COMPLETED
+  CANCELLED
+}
+
+model User {
+  id              BigInt                               @id @map("id")
+  username        String?                              @map("username")
+  discriminator   String?                              @map("discriminator")
+  globalName      String?                              @map("global_name")
+  avatarHash      String?                              @map("avatar_hash")
+  bot             Boolean                              @default(false) @map("bot")
+  firstSeenAt     DateTime                             @default(now()) @map("first_seen_at")
+  lastSeenAt      DateTime                             @default(now()) @map("last_seen_at")
+
+  warns           Warn[]
+  moderatedWarns  Warn[]                               @relation("WarnModerator")
+  tickets         Ticket[]                             @relation("TicketOwner")
+  ticketRoles     TicketParticipant[]
+  middleman       Middleman?
+  mmTrades        MiddlemanTrade[]
+  authoredReviews MiddlemanReview[]                    @relation("ReviewAuthor")
+  stats           MemberTradeStats?
+  tradeFinalizations MiddlemanTradeFinalization[]
+  robloxIdentities UserRobloxIdentity[]
+  guildMemberships GuildMember[]
+
+  @@map("users")
+}
+
+model Warn {
+  id          Int           @id @default(autoincrement())
+  userId      BigInt        @map("user_id")
+  moderatorId BigInt?       @map("moderator_id")
+  severity    WarnSeverity  @map("severity")
+  reason      String?       @db.Text
+  createdAt   DateTime      @default(now()) @map("created_at")
+
+  user        User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  moderator   User?         @relation("WarnModerator", fields: [moderatorId], references: [id], onDelete: SetNull)
+
+  @@index([userId, createdAt(sort: Desc)])
+  @@map("warns")
+}
+
+model Ticket {
+  id              Int                        @id @default(autoincrement())
+  guildId         BigInt                     @map("guild_id")
+  channelId       BigInt                     @unique @map("channel_id")
+  ownerId         BigInt                     @map("owner_id")
+  type            TicketType                 @map("type")
+  status          TicketStatus               @default(OPEN) @map("status")
+  createdAt       DateTime                   @default(now()) @map("created_at")
+  closedAt        DateTime?                  @map("closed_at")
+
+  owner           User                       @relation("TicketOwner", fields: [ownerId], references: [id], onDelete: Cascade)
+  participants    TicketParticipant[]
+  middlemanClaim  MiddlemanClaim?
+  trades          MiddlemanTrade[]
+  reviews         MiddlemanReview[]
+  finalizations   MiddlemanTradeFinalization[]
+
+  @@index([ownerId, status])
+  @@index([guildId, createdAt(sort: Desc)])
+  @@map("tickets")
+}
+
+model TicketParticipant {
+  ticketId Int    @map("ticket_id")
+  userId   BigInt @map("user_id")
+  role     String? @db.VarChar(24)
+  joinedAt DateTime @default(now()) @map("joined_at")
+
+  ticket   Ticket @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  user     User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([ticketId, userId])
+  @@index([userId])
+  @@map("ticket_participants")
+}
+
+model Middleman {
+  userId                 BigInt              @id @map("user_id")
+  primaryRobloxIdentityId Int?               @map("primary_roblox_identity_id")
+  createdAt              DateTime            @default(now()) @map("created_at")
+  updatedAt              DateTime            @updatedAt @map("updated_at")
+  cardConfig             Json?               @map("card_config")
+
+  user                   User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  primaryRobloxIdentity  UserRobloxIdentity? @relation("MiddlemanPrimaryIdentity", fields: [primaryRobloxIdentityId], references: [id], onDelete: SetNull)
+  claims                 MiddlemanClaim[]
+  reviews                MiddlemanReview[]   @relation("ReviewMiddleman")
+
+  @@map("middlemen")
+}
+
+model MiddlemanTrade {
+  id               Int                 @id @default(autoincrement())
+  ticketId         Int                 @map("ticket_id")
+  userId           BigInt              @map("user_id")
+  robloxIdentityId Int?                @map("roblox_identity_id")
+  robloxUsername   String              @map("roblox_username")
+  robloxUserId     BigInt?             @map("roblox_user_id")
+  status           TradeStatus         @default(PENDING) @map("status")
+  confirmed        Boolean             @default(false) @map("confirmed")
+  createdAt        DateTime            @default(now()) @map("created_at")
+  updatedAt        DateTime            @updatedAt @map("updated_at")
+
+  ticket           Ticket              @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  user             User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  robloxIdentity   UserRobloxIdentity? @relation(fields: [robloxIdentityId], references: [id], onDelete: SetNull)
+  items            MiddlemanTradeItem[]
+
+  @@unique([ticketId, userId])
+  @@index([ticketId])
+  @@index([userId])
+  @@index([robloxIdentityId])
+  @@map("mm_trades")
+}
+
+model MiddlemanTradeItem {
+  id        Int             @id @default(autoincrement())
+  tradeId   Int             @map("trade_id")
+  itemName  String          @map("item_name")
+  quantity  Int             @default(1)
+  metadata  Json?           @map("metadata")
+
+  trade     MiddlemanTrade  @relation(fields: [tradeId], references: [id], onDelete: Cascade)
+
+  @@index([tradeId])
+  @@map("mm_trade_items")
+}
+
+model MiddlemanClaim {
+  ticketId              Int      @id @map("ticket_id")
+  middlemanId           BigInt   @map("middleman_id")
+  claimedAt             DateTime @default(now()) @map("claimed_at")
+  reviewRequestedAt     DateTime? @map("review_requested_at")
+  closedAt              DateTime? @map("closed_at")
+  vouched               Boolean  @default(false) @map("vouched")
+  forcedClose           Boolean  @default(false) @map("forced_close")
+  panelMessageId        BigInt?  @map("panel_message_id")
+  finalizationMessageId BigInt?  @map("finalization_message_id")
+
+  ticket                Ticket    @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  middleman             Middleman @relation(fields: [middlemanId], references: [userId], onDelete: Cascade)
+
+  @@index([middlemanId, claimedAt(sort: Desc)])
+  @@map("mm_claims")
+}
+
+model MiddlemanReview {
+  id          Int        @id @default(autoincrement())
+  ticketId    Int        @map("ticket_id")
+  reviewerId  BigInt     @map("reviewer_id")
+  middlemanId BigInt     @map("middleman_id")
+  rating      Int        @map("stars")
+  reviewText  String?    @db.Text @map("review_text")
+  createdAt   DateTime   @default(now()) @map("created_at")
+
+  ticket      Ticket     @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  reviewer    User       @relation("ReviewAuthor", fields: [reviewerId], references: [id], onDelete: Cascade)
+  middleman   Middleman  @relation("ReviewMiddleman", fields: [middlemanId], references: [userId], onDelete: Cascade)
+
+  @@unique([ticketId, reviewerId])
+  @@index([middlemanId, createdAt(sort: Desc)])
+  @@map("mm_reviews")
+}
+
+model MiddlemanTradeFinalization {
+  ticketId    Int      @map("ticket_id")
+  userId      BigInt   @map("user_id")
+  confirmedAt DateTime @default(now()) @map("confirmed_at")
+
+  ticket      Ticket   @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([ticketId, userId])
+  @@map("mm_trade_finalizations")
+}
+
+model MemberTradeStats {
+  userId                   BigInt              @id @map("user_id")
+  tradesCompleted          Int                 @default(0) @map("trades_completed")
+  lastTradeAt              DateTime?           @map("last_trade_at")
+  updatedAt                DateTime            @updatedAt @map("updated_at")
+  preferredRobloxIdentityId Int?               @map("preferred_roblox_identity_id")
+  partnerTag               String?             @map("partner_tag")
+
+  user                     User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  preferredRobloxIdentity  UserRobloxIdentity? @relation("PreferredIdentity", fields: [preferredRobloxIdentityId], references: [id], onDelete: SetNull)
+
+  @@map("member_trade_stats")
+}
+
+model UserRobloxIdentity {
+  id                Int                 @id @default(autoincrement())
+  userId            BigInt              @map("user_id")
+  robloxUserId      BigInt?             @map("roblox_user_id")
+  robloxUsername    String              @map("roblox_username")
+  verified          Boolean             @default(false) @map("verified")
+  createdAt         DateTime            @default(now()) @map("created_at")
+  updatedAt         DateTime            @updatedAt @map("updated_at")
+  lastUsedAt        DateTime?           @map("last_used_at")
+
+  user              User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  middlemanProfiles Middleman[]         @relation("MiddlemanPrimaryIdentity")
+  trades            MiddlemanTrade[]
+  preferredByStats  MemberTradeStats[]  @relation("PreferredIdentity")
+
+  @@index([userId])
+  @@index([robloxUserId])
+  @@unique([userId, robloxUsername])
+  @@map("user_roblox_identities")
+}
+
+model GuildMember {
+  guildId    BigInt   @map("guild_id")
+  userId     BigInt   @map("user_id")
+  nickname   String?  @map("nickname")
+  joinedAt   DateTime? @map("joined_at")
+  lastSeenAt DateTime  @default(now()) @map("last_seen_at")
+  roles      Json?     @map("roles")
+
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([guildId, userId])
+  @@index([userId])
+  @@map("guild_members")
+}

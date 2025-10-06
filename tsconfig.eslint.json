@@ -1,0 +1,9 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "allowJs": true,
+    "noEmit": true
+  },
+  "include": ["src", "scripts", "tests", "vitest.config.ts", "prisma/**/*.ts"],
+  "exclude": ["dist", "node_modules"]
+}

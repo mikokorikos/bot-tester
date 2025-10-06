@@ -1,0 +1,4 @@
+# v1.0.0 - Initial TypeScript foundation
+- Documented the modernization plan in `analysis/03-proposal.md`.
+- Bootstrapped the TypeScript project with strict tooling, Prisma schema, and Docker services.
+- Implemented the new runtime core with logger, config validation, embed factory, and the `/ping` command.

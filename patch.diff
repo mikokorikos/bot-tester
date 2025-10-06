@@ -1,0 +1,19 @@
+diff --git a/src/application/usecases/middleman/OpenMiddlemanChannelUseCase.ts b/src/application/usecases/middleman/OpenMiddlemanChannelUseCase.ts
+--- a/src/application/usecases/middleman/OpenMiddlemanChannelUseCase.ts
++++ b/src/application/usecases/middleman/OpenMiddlemanChannelUseCase.ts
+@@
+-import { type CreateMiddlemanTicketDTO, CreateMiddlemanTicketSchema } from '@/application/dto/ticket.dto';
+-import { TicketType } from '@/domain/entities/types';
+-import type { ITicketRepository, TicketParticipantInput } from '@/domain/repositories/ITicketRepository';
+-import { ChannelType, OverwriteType, PermissionFlagsBits, type Guild, type TextChannel } from 'discord.js';
+-import type { Logger } from 'pino';
+-
+-import { buildClaimButtonRow } from '@/presentation/components/buttons/MiddlemanClaimButton';
+-import { embedFactory, type EmbedFactory } from '@/presentation/embeds/EmbedFactory';
++import { ChannelType, OverwriteType, PermissionFlagsBits, type Guild, type TextChannel } from 'discord.js';
++import type { Logger } from 'pino';
++
++import { type CreateMiddlemanTicketDTO, CreateMiddlemanTicketSchema } from '@/application/dto/ticket.dto';
++import { TicketType } from '@/domain/entities/types';
++import type { ITicketRepository, TicketParticipantInput } from '@/domain/repositories/ITicketRepository';
++import { embedFactory, type EmbedFactory } from '@/presentation/embeds/EmbedFactory';

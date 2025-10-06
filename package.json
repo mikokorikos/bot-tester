@@ -1,0 +1,84 @@
+{
+  "name": "dedos-shop-bot",
+  "version": "1.0.1",
+  "description": "Discord bot for Dedos Shop with a clean TypeScript architecture and Prisma-backed persistence.",
+  "type": "module",
+  "main": "dist/index.js",
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "build": "tsc --project tsconfig.json && tsc-alias",
+    "start": "node dist/index.js",
+    "lint": "eslint . --max-warnings 0",
+    "lint:fix": "eslint . --fix",
+    "lint-staged": "lint-staged",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:unit": "vitest run tests/unit",
+    "test:integration": "vitest run tests/integration",
+    "test:e2e": "vitest run tests/e2e",
+    "test:coverage": "vitest run --coverage",
+    "db:generate": "prisma generate",
+    "db:push": "prisma db push",
+    "db:migrate": "prisma migrate dev",
+    "db:migrate:prod": "prisma migrate deploy",
+    "db:seed": "tsx prisma/seed.ts",
+    "deploy:commands": "tsx scripts/deploy-commands.ts",
+    "clear:commands": "tsx scripts/clear-commands.ts",
+    "migrate:from-old": "tsx scripts/migrate-from-old-db.ts",
+    "docker:up": "docker-compose up -d",
+    "docker:down": "docker-compose down",
+    "prepare": "husky install",
+    "postinstall": "prisma generate"
+  },
+  "lint-staged": {
+    "*.{ts,tsx}": [
+      "eslint --fix",
+      "prettier --write"
+    ],
+    "*.{json,md,yml,yaml}": [
+      "prettier --write"
+    ]
+  },
+  "dependencies": {
+    "@discordjs/rest": "^2.3.0",
+    "@napi-rs/canvas": "^0.1.80",
+    "@prisma/client": "^6.1.0",
+    "discord-api-types": "^0.37.83",
+    "discord.js": "^14.16.3",
+    "dotenv": "^16.4.5",
+    "gifencoder": "^2.0.1",
+    "gifuct-js": "^2.1.2",
+    "mysql2": "^3.15.1",
+    "pino": "^9.5.0",
+    "pino-pretty": "^11.3.0",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.36.0",
+    "@types/gifencoder": "^2.0.3",
+    "@types/node": "^20.17.6",
+    "@typescript-eslint/eslint-plugin": "^8.44.1",
+    "@typescript-eslint/parser": "^8.44.1",
+    "@vitest/coverage-v8": "^2.1.5",
+    "eslint": "^8.57.1",
+    "eslint-config-prettier": "^9.1.0",
+    "eslint-import-resolver-typescript": "3.5.5",
+    "eslint-plugin-import": "^2.29.1",
+    "eslint-plugin-simple-import-sort": "^12.1.0",
+    "globals": "^16.4.0",
+    "husky": "^9.1.6",
+    "lint-staged": "^15.2.10",
+    "prettier": "^3.3.3",
+    "prisma": "^6.1.0",
+    "tsc-alias": "^1.8.10",
+    "tsx": "^4.19.2",
+    "typescript": "5.6.3",
+    "vitest": "^2.1.5"
+  }
+}
