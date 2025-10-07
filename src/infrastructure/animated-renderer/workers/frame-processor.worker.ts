@@ -38,13 +38,15 @@ interface OverlayOperation extends FrameOperationBase {
 
 export type FrameOperation = BlurOperation | SaturateOperation | OverlayOperation;
 
-if (!parentPort) {
+const port = parentPort;
+
+if (!port) {
   throw new Error('Frame processor worker must be spawned as a worker thread');
 }
 
-parentPort.on('message', async (message: WorkerMessage) => {
+port.on('message', (message: WorkerMessage) => {
   if (message.type === 'shutdown') {
-    parentPort?.close();
+    port.close();
     return;
   }
 
@@ -58,7 +60,7 @@ parentPort.on('message', async (message: WorkerMessage) => {
   ctx.putImageData(imageData, 0, 0);
 
   const png = canvas.toBuffer('image/png');
-  parentPort?.postMessage(
+  port.postMessage(
     {
       type: 'processedFrame',
       frameIndex,

@@ -1,4 +1,4 @@
-import LRUCache from 'lru-cache';
+import { LRUCache } from 'lru-cache';
 
 export interface CacheEntry<TValue> {
   readonly value: TValue;

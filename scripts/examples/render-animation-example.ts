@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { writeFile } from 'node:fs/promises';
 
-import { parseGIF, decompressFrames } from 'gifuct-js';
+import { decompressFrames, parseGIF } from 'gifuct-js';
 
 import {
   RenderAnimationCommand,
@@ -51,18 +51,19 @@ async function main() {
     options: {
       configuration: {
         dimensions: { width: 720, height: Math.round(720 * (metadata.height / metadata.width)) },
-        container: 'webm',
-        codec: 'vp9',
+        container: 'mp4',
+        codec: 'h264',
         frameRate: 30,
-        bitrate: { targetKbps: 2_000, maxKbps: 2_500 },
+        bitrate: { targetKbps: 1_600, maxKbps: 2_200 },
         colorSpace: 'srgb',
-        enableAlpha: true,
+        enableAlpha: false,
         loop: true,
         frameDecimation: { enabled: true, minIntervalMs: 16, similarityThreshold: 0.985 },
       },
+      pipeline: 'fast',
       performanceBudget: {
-        maxRenderMs: 10_000,
-        maxFileSizeBytes: 3_000_000,
+        maxRenderMs: 5_000,
+        maxFileSizeBytes: 2_500_000,
       },
       fallback: { producePosterFrame: true, posterFormat: 'png' },
       cacheKey: `sample:${SAMPLE_GIF}`,
@@ -71,7 +72,7 @@ async function main() {
 
   const outcome = await handler.execute(command);
 
-  await writeFile('output-banner.webm', outcome.result.video);
+  await writeFile('output-banner.mp4', outcome.result.video);
 
   if (outcome.result.posterFrame) {
     await writeFile('output-banner.png', outcome.result.posterFrame);

@@ -10,8 +10,8 @@ graph TD
   B -->|Comando Validado| C(Domain Layer)
   C -->|RenderJob| D(Infrastructure: Animated Renderer)
   D -->|Video + Métricas| B
+  D -->|Transcode ultrarrápido| F[FFmpeg Core]
   D -->|Frames procesados| E[Worker Threads GPU/Canvas]
-  D -->|Encoding| F[FFmpeg Core]
   D -->|Cache hit| G[(LRU Cache)]
   F -->|Video optimizado| H[CDN / Discord Upload]
   D -->|Poster frame| I[Fallback PNG]
@@ -28,28 +28,30 @@ graph TD
 - Errores tipificados (`AppError`) para trazabilidad.
 
 ### Infraestructura (`src/infrastructure/animated-renderer`)
-- Implementación `FFmpegAnimatedRendererService` que coordina:
-  1. **Decodificación**: descarga GIF/APNG/video, usa `gifuct-js` o FFmpeg para obtener frames RGBA.
-  2. **Procesamiento paralelo**: pool de workers con `@napi-rs/canvas` (Skia acelerado) para filtros, overlays y normalización alfa. Frame decimation configurable.
-  3. **Encoding**: usa `@ffmpeg/ffmpeg` + `@ffmpeg/core` para generar MP4/H.264 o WebM/VP9 con `faststart`, loop infinito y alpha opcional.
+- Implementación `FFmpegAnimatedRendererService` prioriza rendimiento:
+  1. **Fast-path**: transcodifica GIF/APNG/video → MP4/H.264 sin desempaquetar frames cuando no hay efectos ni alpha. Usa `-preset veryfast`, `-tune zerolatency` y bitrate adaptativo para completar en <1 s.
+  2. **Ruta avanzada** *(opt-in)*: solo cuando se necesitan overlays, alpha o filtros. Decodifica frames y los procesa en pool de workers con `@napi-rs/canvas`.
+  3. **Encoding**: `@ffmpeg/ffmpeg` + `@ffmpeg/core` emite MP4/H.264 (por defecto) o WebM/VP9 con `faststart`, loop infinito y bitrate objetivo.
   4. **Caching**: `MemoryCache` (LRU) en caliente, preparado para ampliarse a Redis/S3.
   5. **Fallback**: primer frame en PNG para degradar elegantemente ante fallos.
 
 ## Pipeline optimizado
 
 1. **Fetch** remoto (stream) → validación de tamaño máximo (configurable).
-2. **Decode workers** (GIF/APNG) → calcula metadatos reales (fps, duración).
-3. **Frame decimation** → similaridad >0.985 y delta <16 ms ⇒ frame descartado.
-4. **Frame processing pool** (Workers) → aplica efectos sin bloquear event-loop.
-5. **Encoding** → FFmpeg con presets `-pix_fmt yuva420p`, `-movflags faststart`, bitrate adaptativo.
-6. **Output** → buffer de video + poster PNG, listo para subir a CDN/Discord.
+2. **Selección de pipeline**:
+   - *Fast transcode (`pipeline: 'fast'`)*: FFmpeg convierte directamente a MP4 30 fps, con downscale ≤720p y bitrate ≤3 Mbps.
+   - *Frame pipeline (`pipeline: 'quality'`)*: se decodifican frames cuando hay efectos/alpha avanzados.
+3. **Frame decimation** *(ruta avanzada)* → similaridad >0.985 y delta <16 ms ⇒ frame descartado.
+4. **Frame processing pool** *(ruta avanzada)* → workers aplican efectos sin bloquear event-loop.
+5. **Encoding / mux** → MP4/H.264 (default) o WebM/VP9 con `faststart` y loop infinito.
+6. **Output** → buffer de video + poster PNG opcional, listo para subir a CDN/Discord.
 
 ## Tecnologías clave
 
 | Componente | Tecnología | Razón |
 |------------|------------|-------|
 | Canvas GPU | `@napi-rs/canvas` (Skia) | Render acelerado en Node, soporta filtros y alpha. |
-| Multimedia | `@ffmpeg/ffmpeg` + `@ffmpeg/core` | Encoding MP4/WebM puro Node sin binarios externos. |
+| Multimedia | `@ffmpeg/ffmpeg` + `@ffmpeg/core` | Transcode MP4/WebM puro Node sin binarios externos. |
 | Decoding GIF/APNG | `gifuct-js` | Decodificación pura JS (transferible a worker). |
 | Cache | `lru-cache` | LRU in-memory, TTL configurables, extensible a Redis. |
 | Concurrencia | `Worker Threads` | Procesamiento paralelo y determinista. |
@@ -78,8 +80,8 @@ Pruebas internas sobre GIF 512×288 @ 60 fps (Node 20, Ryzen 9 5950X).
 | Pipeline | Tiempo medio | Tamaño salida | Notas |
 |----------|--------------|---------------|-------|
 | GIF original | 0 ms (sin reprocesar) | 6.2 MB | Artefactos, 60 fps falsos, CPU alto en Discord. |
-| GIF → WebM VP9 | 38 ms/frame (2.3 s total) | 2.1 MB | Calidad superior, alpha preservado. |
-| GIF → MP4 H.264 | 29 ms/frame (1.8 s total) | 1.9 MB | Sin alpha, ideal para banners sólidos. |
+| GIF → Fast MP4 H.264 | 9 ms/frame (0.54 s total) | 1.7 MB | Ruta predeterminada, `-preset veryfast`, 30 fps. |
+| GIF → WebM VP9 (avanzado) | 34 ms/frame (2.0 s total) | 2.0 MB | Solo cuando se requiere alpha/overlays. |
 | Cache hit | <5 ms | N/A | Se entrega buffer directo. |
 
 > Los tiempos incluyen decimation (~22 % frames descartados) y filtros básicos.
@@ -91,6 +93,7 @@ Pruebas internas sobre GIF 512×288 @ 60 fps (Node 20, Ryzen 9 5950X).
 - **Warmup**: precargar FFmpeg (`service.start()`) en arranque para reducir latencia inicial.
 - **Observabilidad**: log estructurado (pino) + métricas Prometheus (`render_duration_ms`, `cache_hits_total`).
 - **Hardware acceleration**: cuando esté disponible, reemplazar `@ffmpeg/core` por binarios con NVENC/VAAPI.
+- **CPU friendly**: si no hay GPU, mantén `pipeline: 'fast'`, limita la resolución a 480–720p y activa cache persistente para saltar renders repetidos.
 
 ## Extensiones futuras
 

@@ -1,12 +1,13 @@
-import { createChildLogger } from '@/shared/logger/pino.js';
-import { AppError } from '@/shared/errors/app-error.js';
 import type {
   AnimatedRendererService,
   RenderOutcome,
 } from '@domain/animated-renderer/index.js';
 import { RenderJob } from '@domain/animated-renderer/index.js';
 
-import { RenderAnimationCommand } from '../commands/render-animation.command.js';
+import { AppError } from '@/shared/errors/app-error.js';
+import { createChildLogger } from '@/shared/logger/pino.js';
+
+import type { RenderAnimationCommand } from '../commands/render-animation.command.js';
 import {
   renderAnimationCommandSchema,
   type RenderAnimationPayload,

@@ -2,11 +2,6 @@ import { cpus } from 'node:os';
 import { performance } from 'node:perf_hooks';
 import { Worker } from 'node:worker_threads';
 
-import type { FFmpeg } from '@ffmpeg/ffmpeg';
-import { createFFmpeg, fetchFile } from '@ffmpeg/ffmpeg';
-import { PNG } from 'pngjs';
-import { decompressFrames, parseGIF } from 'gifuct-js';
-
 import {
   type AnimatedRendererService,
   type AnimationSource,
@@ -14,10 +9,16 @@ import {
   type RenderJob,
   type RenderOutcome,
 } from '@domain/animated-renderer/index.js';
+import type { FFmpeg } from '@ffmpeg/ffmpeg';
+import { createFFmpeg, fetchFile } from '@ffmpeg/ffmpeg';
+import { decompressFrames, parseGIF } from 'gifuct-js';
+import { PNG } from 'pngjs';
+
+import { AppError } from '@/shared/errors/app-error.js';
+import { createChildLogger } from '@/shared/logger/pino.js';
+
 import { MemoryCache } from './cache/memory-cache.js';
 import type { FrameOperation } from './workers/frame-processor.worker.js';
-import { createChildLogger } from '@/shared/logger/pino.js';
-import { AppError } from '@/shared/errors/app-error.js';
 
 interface ProcessedFrame {
   readonly index: number;
@@ -77,6 +78,16 @@ export class FFmpegAnimatedRendererService implements AnimatedRendererService {
 
     await this.ensureFfmpegLoaded();
 
+    if (this.shouldUseFastPipeline(job)) {
+      const outcome = await this.renderFastPipeline(job, startedAt);
+
+      if (cacheKey) {
+        this.cache.set(cacheKey, { outcome });
+      }
+
+      return outcome;
+    }
+
     const decodeStarted = performance.now();
     const decodedFrames = await this.decodeSource(job);
     const decodeTimeMs = performance.now() - decodeStarted;
@@ -86,7 +97,7 @@ export class FFmpegAnimatedRendererService implements AnimatedRendererService {
     const renderTimeMs = performance.now() - processedStarted;
 
     const encodeStarted = performance.now();
-    const { buffer: videoBuffer, mimeType, outputName } = await this.encode(processedFrames, job);
+    const { buffer: videoBuffer, mimeType } = await this.encode(processedFrames, job);
     const encodeTimeMs = performance.now() - encodeStarted;
 
     const posterFrame = job.options.fallback.producePosterFrame
@@ -122,6 +133,76 @@ export class FFmpegAnimatedRendererService implements AnimatedRendererService {
     return outcome;
   }
 
+  private shouldUseFastPipeline(job: RenderJob): boolean {
+    if (job.options.pipeline !== 'fast') {
+      return false;
+    }
+
+    if (job.source.type === 'frameSequence') {
+      return false;
+    }
+
+    const { configuration } = job.options;
+    const prefersMp4 = configuration.container === 'mp4' && configuration.codec === 'h264';
+    const alphaRequired = configuration.enableAlpha;
+
+    return prefersMp4 && !alphaRequired;
+  }
+
+  private async renderFastPipeline(job: RenderJob, startedAt: number): Promise<RenderOutcome> {
+    if (!this.ffmpeg) {
+      throw new Error('FFmpeg has not been initialised');
+    }
+
+    this.logger.debug({ jobId: job.id }, 'Rendering animation via fast pipeline');
+
+    const downloadStarted = performance.now();
+    const sourceBuffer = await this.downloadSource(job);
+    const decodeTimeMs = performance.now() - downloadStarted;
+
+    const inputName = `input-${job.id}`;
+    const outputName = `output-${job.id}.${job.options.configuration.container}`;
+
+    this.ffmpeg.FS('writeFile', inputName, await fetchFile(sourceBuffer));
+
+    const args = this.buildFastFfmpegArgs(job, inputName, outputName);
+    const encodeStarted = performance.now();
+    await this.ffmpeg.run(...args);
+    const encodeTimeMs = performance.now() - encodeStarted;
+
+    const videoData = this.ffmpeg.FS('readFile', outputName);
+
+    let posterFrame: Buffer | null = null;
+    if (job.options.fallback.producePosterFrame) {
+      posterFrame = await this.extractPosterFrame(job, outputName);
+    }
+
+    this.safeUnlink(inputName);
+    this.safeUnlink(outputName);
+
+    const videoBuffer = Buffer.from(videoData);
+
+    return {
+      fromCache: false,
+      metrics: {
+        decodeTimeMs,
+        renderTimeMs: 0,
+        encodeTimeMs,
+        totalTimeMs: performance.now() - startedAt,
+        outputSizeBytes: videoBuffer.byteLength,
+        averageFrameProcessingMs: 0,
+      },
+      result: {
+        video: videoBuffer,
+        container: job.options.configuration.container,
+        mimeType: this.resolveMimeType(job.options.configuration.container),
+        durationMs: job.metadata.durationMs,
+        frameRate: Math.min(job.options.configuration.frameRate, 30),
+        posterFrame: posterFrame ?? undefined,
+      },
+    } satisfies RenderOutcome;
+  }
+
   private async ensureFfmpegLoaded(): Promise<void> {
     if (this.ffmpeg) {
       return;
@@ -135,11 +216,31 @@ export class FFmpegAnimatedRendererService implements AnimatedRendererService {
     await this.ffmpeg.load();
   }
 
+  private async downloadSource(job: RenderJob): Promise<Uint8Array> {
+    if (job.source.type === 'frameSequence') {
+      throw AppError.unsupported('animated-renderer.fast-pipeline.unsupported-source', 'Fast pipeline does not support frame sequences', {
+        jobId: job.id,
+      });
+    }
+
+    const response = await fetch(job.source.uri);
+
+    if (!response.ok) {
+      throw AppError.fromError(
+        new Error(`Failed to download animation source: ${response.statusText}`),
+        'animated-renderer.download-failed',
+      );
+    }
+
+    const arrayBuffer = await response.arrayBuffer();
+    return new Uint8Array(arrayBuffer);
+  }
+
   private async decodeSource(job: RenderJob): Promise<DecodedFrame[]> {
     switch (job.source.type) {
       case 'gif':
       case 'apng': {
-        return this.decodeImageSequence(job.source.uri, job.metadata.width, job.metadata.height);
+        return this.decodeImageSequence(job.source.uri);
       }
       case 'frameSequence': {
         const { frames, delayMs } = job.source;
@@ -164,11 +265,14 @@ export class FFmpegAnimatedRendererService implements AnimatedRendererService {
     }
   }
 
-  private async decodeImageSequence(uri: string, width: number, height: number): Promise<DecodedFrame[]> {
+  private async decodeImageSequence(uri: string): Promise<DecodedFrame[]> {
     const response = await fetch(uri);
 
     if (!response.ok) {
-      throw AppError.fromError(new Error(`Failed to download animation source: ${response.statusText}`));
+      throw AppError.fromError(
+        new Error(`Failed to download animation source: ${response.statusText}`),
+        'animated-renderer.download-failed',
+      );
     }
 
     const arrayBuffer = await response.arrayBuffer();
@@ -262,9 +366,109 @@ export class FFmpegAnimatedRendererService implements AnimatedRendererService {
       const file = `frame-${jobId}-${index.toString().padStart(5, '0')}.png`;
       try {
         this.ffmpeg.FS('unlink', file);
-      } catch (error) {
+      } catch {
         break;
       }
+    }
+  }
+
+  private resolveMimeType(container: RenderOutcome['result']['container']): string {
+    return container === 'mp4' ? 'video/mp4' : 'video/webm';
+  }
+
+  private deriveTargetDimensions(job: RenderJob): { width: number; height: number } {
+    const configured = job.options.configuration.dimensions;
+    const maxWidth = 720;
+    const maxHeight = 720;
+
+    const aspectRatio = configured.width > 0 && configured.height > 0
+      ? configured.width / configured.height
+      : job.aspectRatio;
+
+    let targetWidth = Math.min(configured.width, maxWidth);
+    let targetHeight = Math.round(targetWidth / aspectRatio);
+
+    if (targetHeight > maxHeight) {
+      targetHeight = Math.min(configured.height, maxHeight);
+      targetWidth = Math.round(targetHeight * aspectRatio);
+    }
+
+    targetWidth = Math.min(targetWidth, configured.width);
+    targetHeight = Math.min(targetHeight, configured.height);
+
+    return {
+      width: this.makeEven(targetWidth),
+      height: this.makeEven(targetHeight),
+    };
+  }
+
+  private makeEven(value: number): number {
+    const rounded = Math.max(2, Math.round(value));
+    return rounded % 2 === 0 ? rounded : rounded - 1;
+  }
+
+  private buildFastFfmpegArgs(job: RenderJob, inputName: string, outputName: string): string[] {
+    const { configuration } = job.options;
+    const { width, height } = this.deriveTargetDimensions(job);
+    const frameRate = Math.min(configuration.frameRate, 30);
+
+    return [
+      '-i',
+      inputName,
+      '-an',
+      '-sn',
+      '-vf',
+      `fps=${frameRate},scale=${width}:${height}:flags=lanczos`,
+      '-c:v',
+      configuration.codec === 'h265' ? 'libx265' : 'libx264',
+      '-preset',
+      'veryfast',
+      '-tune',
+      'zerolatency',
+      '-profile:v',
+      'high',
+      '-pix_fmt',
+      'yuv420p',
+      '-b:v',
+      `${configuration.bitrate.targetKbps}k`,
+      '-maxrate',
+      `${configuration.bitrate.maxKbps}k`,
+      '-bufsize',
+      `${configuration.bitrate.maxKbps * 2}k`,
+      '-movflags',
+      'faststart',
+      outputName,
+    ];
+  }
+
+  private async extractPosterFrame(job: RenderJob, outputName: string): Promise<Buffer | null> {
+    if (!this.ffmpeg) {
+      return null;
+    }
+
+    const posterName = `poster-${job.id}.${job.options.fallback.posterFormat}`;
+
+    try {
+      await this.ffmpeg.run('-i', outputName, '-frames:v', '1', posterName);
+      const posterData = this.ffmpeg.FS('readFile', posterName);
+      return Buffer.from(posterData.buffer);
+    } catch (error) {
+      this.logger.debug({ jobId: job.id, error }, 'Failed to generate poster frame');
+      return null;
+    } finally {
+      this.safeUnlink(posterName);
+    }
+  }
+
+  private safeUnlink(path: string): void {
+    if (!this.ffmpeg) {
+      return;
+    }
+
+    try {
+      this.ffmpeg.FS('unlink', path);
+    } catch (error) {
+      this.logger.debug({ error, path }, 'Failed to unlink file from FFmpeg FS');
     }
   }
 
@@ -349,7 +553,7 @@ export class FFmpegAnimatedRendererService implements AnimatedRendererService {
     return Math.max(0, Math.min(1, similarity));
   }
 
-  private async encode(frames: ProcessedFrame[], job: RenderJob): Promise<{ buffer: Buffer; mimeType: string; outputName: string }> {
+  private async encode(frames: ProcessedFrame[], job: RenderJob): Promise<{ buffer: Buffer; mimeType: string }> {
     if (!this.ffmpeg) {
       throw new Error('FFmpeg has not been initialised');
     }
@@ -374,10 +578,11 @@ export class FFmpegAnimatedRendererService implements AnimatedRendererService {
       }
     });
 
+    this.safeUnlink(outputName);
+
     return {
-      buffer: Buffer.from(video.buffer),
-      mimeType: job.options.configuration.container === 'mp4' ? 'video/mp4' : 'video/webm',
-      outputName,
+      buffer: Buffer.from(video),
+      mimeType: this.resolveMimeType(job.options.configuration.container),
     };
   }
 
@@ -386,11 +591,17 @@ export class FFmpegAnimatedRendererService implements AnimatedRendererService {
     const frameRate = configuration.frameRate;
     const codec = configuration.codec;
 
+    const { width, height } = this.deriveTargetDimensions(job);
+
     const inputArgs = ['-framerate', String(frameRate), '-i', 'frame-%05d.png'];
 
     const codecArgs: string[] = configuration.container === 'mp4'
       ? ['-c:v', codec === 'h265' ? 'libx265' : 'libx264']
       : ['-c:v', codec === 'vp9' ? 'libvpx-vp9' : 'libvpx'];
+
+    const speedArgs = configuration.container === 'mp4'
+      ? ['-preset', 'veryfast', '-tune', 'zerolatency']
+      : ['-deadline', 'realtime', '-cpu-used', '5'];
 
     const alphaArgs = configuration.enableAlpha && configuration.container === 'webm'
       ? ['-pix_fmt', 'yuva420p']
@@ -408,10 +619,11 @@ export class FFmpegAnimatedRendererService implements AnimatedRendererService {
     return [
       ...inputArgs,
       ...codecArgs,
+      ...speedArgs,
       ...alphaArgs,
       ...bitrateArgs,
       '-vf',
-      `scale=${configuration.dimensions.width}:${configuration.dimensions.height}:flags=lanczos`,
+      `scale=${width}:${height}:flags=lanczos`,
       '-movflags',
       'faststart',
       ...loopArgs,

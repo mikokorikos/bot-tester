@@ -40,9 +40,12 @@ export interface RenderFallbackPolicy {
   readonly posterFormat: 'png' | 'webp';
 }
 
+export type RenderPipeline = 'fast' | 'quality';
+
 export interface RenderOptions {
   readonly configuration: RenderConfiguration;
   readonly performanceBudget: RenderPerformanceBudget;
   readonly fallback: RenderFallbackPolicy;
+  readonly pipeline: RenderPipeline;
   readonly cacheKey?: string;
 }

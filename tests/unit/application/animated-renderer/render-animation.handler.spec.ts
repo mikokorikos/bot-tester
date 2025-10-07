@@ -1,14 +1,14 @@
+import type {
+  AnimatedRendererService,
+  RenderJob,
+  RenderOutcome,
+} from '@domain/animated-renderer/index.js';
 import { describe, expect, it, vi } from 'vitest';
 
 import {
   RenderAnimationCommand,
   RenderAnimationHandler,
 } from '@/application/animated-renderer/index.js';
-import type {
-  AnimatedRendererService,
-  RenderJob,
-  RenderOutcome,
-} from '@domain/animated-renderer/index.js';
 
 const sampleOutcome: RenderOutcome = {
   fromCache: false,
@@ -59,6 +59,7 @@ describe('RenderAnimationHandler', () => {
           loop: true,
           frameDecimation: { enabled: true, minIntervalMs: 16, similarityThreshold: 0.95 },
         },
+        pipeline: 'quality',
         performanceBudget: { maxRenderMs: 10_000, maxFileSizeBytes: 3_000_000 },
         fallback: { producePosterFrame: true, posterFormat: 'png' },
       },
@@ -101,6 +102,7 @@ describe('RenderAnimationHandler', () => {
           loop: true,
           frameDecimation: { enabled: true, minIntervalMs: 16, similarityThreshold: 0.95 },
         },
+        pipeline: 'quality',
         performanceBudget: { maxRenderMs: 10_000, maxFileSizeBytes: 3_000_000 },
         fallback: { producePosterFrame: true, posterFormat: 'png' },
       },
