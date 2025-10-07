@@ -47,6 +47,8 @@
   },
   "dependencies": {
     "@discordjs/rest": "^2.3.0",
+    "@ffmpeg/core": "^0.12.6",
+    "@ffmpeg/ffmpeg": "^0.12.12",
     "@napi-rs/canvas": "^0.1.80",
     "@prisma/client": "^6.1.0",
     "discord-api-types": "^0.37.83",
@@ -54,6 +56,8 @@
     "dotenv": "^16.4.5",
     "gifencoder": "^2.0.1",
     "gifuct-js": "^2.1.2",
+    "lru-cache": "^11.0.2",
+    "pngjs": "^7.0.0",
     "mysql2": "^3.15.1",
     "pino": "^9.5.0",
     "pino-pretty": "^11.3.0",
@@ -62,6 +66,7 @@
   "devDependencies": {
     "@eslint/js": "^9.36.0",
     "@types/gifencoder": "^2.0.3",
+    "@types/pngjs": "^6.0.5",
     "@types/node": "^20.17.6",
     "@typescript-eslint/eslint-plugin": "^8.44.1",
     "@typescript-eslint/parser": "^8.44.1",
