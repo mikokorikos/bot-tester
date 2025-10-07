@@ -59,6 +59,7 @@ class MockCanvasContext {
     _counterclockwise?: boolean,
   ): void {}
   public fillRect(_x: number, _y: number, _width: number, _height: number): void {}
+  public putImageData(_imageData: unknown, _dx: number, _dy: number): void {}
   public clearRect(_x: number, _y: number, _width: number, _height: number): void {}
   public stroke(): void {}
   public fill(): void {}
@@ -107,9 +108,22 @@ class MockCanvas {
   }
 }
 
+class MockImageData {
+  public readonly data: Uint8ClampedArray;
+  public readonly width: number;
+  public readonly height: number;
+
+  public constructor(data: Uint8ClampedArray, width: number, height: number) {
+    this.data = data;
+    this.width = width;
+    this.height = height;
+  }
+}
+
 vi.mock('@napi-rs/canvas', () => ({
   createCanvas: (width: number, height: number) => new MockCanvas(width, height),
   loadImage: async () => ({ width: 1, height: 1 }),
+  ImageData: MockImageData,
 }));
 
 vi.mock('gifencoder', () => {
@@ -139,9 +153,3 @@ vi.mock('gifencoder', () => {
   return { default: MockGifEncoder };
 });
 
-vi.mock('gifuct-js', () => ({
-  parseGIF: () => ({
-    lsd: { width: 1, height: 1 },
-  }),
-  decompressFrames: () => [],
-}));

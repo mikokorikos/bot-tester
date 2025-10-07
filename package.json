@@ -34,7 +34,8 @@
     "docker:up": "docker-compose up -d",
     "docker:down": "docker-compose down",
     "prepare": "husky install",
-    "postinstall": "prisma generate"
+    "postinstall": "prisma generate",
+    "media:harness": "tsx scripts/media-harness.ts"
   },
   "lint-staged": {
     "*.{ts,tsx}": [
