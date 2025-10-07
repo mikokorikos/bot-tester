@@ -53,7 +53,6 @@ export const renderOptionsSchema = z.object({
     producePosterFrame: z.boolean().default(true),
     posterFormat: z.enum(['png', 'webp']).default('png'),
   }),
-  preferNativeBinary: z.boolean().default(true),
   cacheKey: z.string().optional(),
 });
 

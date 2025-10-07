@@ -1,4 +1,3 @@
-import { spawn, spawnSync } from 'node:child_process';
 import { cpus } from 'node:os';
 import { performance } from 'node:perf_hooks';
 import { Worker } from 'node:worker_threads';
@@ -36,8 +35,6 @@ interface FFmpegAnimatedRendererOptions {
   readonly cacheEntries?: number;
   readonly workerPoolSize?: number;
   readonly ffmpegCorePath?: string;
-  readonly nativeBinaryPath?: string;
-  readonly preferNativeFastPath?: boolean;
 }
 
 const DEFAULT_OPTIONS: Required<Pick<FFmpegAnimatedRendererOptions, 'cacheEntries' | 'cacheTtlMs' | 'workerPoolSize'>> = {
@@ -57,10 +54,6 @@ export class FFmpegAnimatedRendererService implements AnimatedRendererService {
 
   private readonly ffmpegCorePath?: string;
 
-  private readonly nativeBinaryPath?: string;
-
-  private readonly preferNativeFastPath: boolean;
-
   public constructor(options: FFmpegAnimatedRendererOptions = {}) {
     const merged = { ...DEFAULT_OPTIONS, ...options };
     this.cache = new MemoryCache<RendererCacheEntry>({
@@ -69,15 +62,6 @@ export class FFmpegAnimatedRendererService implements AnimatedRendererService {
     });
     this.workerPool = new FrameProcessorPool(merged.workerPoolSize);
     this.ffmpegCorePath = options.ffmpegCorePath;
-    this.preferNativeFastPath = options.preferNativeFastPath ?? true;
-    this.nativeBinaryPath = this.preferNativeFastPath
-      ? this.resolveNativeBinary(options.nativeBinaryPath)
-      : undefined;
-    if (this.nativeBinaryPath) {
-      this.logger.debug({ binaryPath: this.nativeBinaryPath }, 'Native ffmpeg binary detected for fast pipeline');
-    } else if (this.preferNativeFastPath) {
-      this.logger.debug('Native ffmpeg binary not found, falling back to WebAssembly fast path');
-    }
   }
 
   public async render(job: RenderJob): Promise<RenderOutcome> {
@@ -166,124 +150,15 @@ export class FFmpegAnimatedRendererService implements AnimatedRendererService {
   }
 
   private async renderFastPipeline(job: RenderJob, startedAt: number): Promise<RenderOutcome> {
+    if (!this.ffmpeg) {
+      throw new Error('FFmpeg has not been initialised');
+    }
+
     this.logger.debug({ jobId: job.id }, 'Rendering animation via fast pipeline');
 
     const downloadStarted = performance.now();
     const sourceBuffer = await this.downloadSource(job);
     const decodeTimeMs = performance.now() - downloadStarted;
-
-    if (this.preferNativeFastPath && this.nativeBinaryPath && job.options.preferNativeBinary) {
-      try {
-        return await this.renderFastWithNative(job, startedAt, sourceBuffer, decodeTimeMs);
-      } catch (error) {
-        this.logger.warn(
-          { jobId: job.id, error },
-          'Native ffmpeg fast pipeline failed, falling back to WebAssembly',
-        );
-      }
-    }
-
-    return this.renderFastWithWasm(job, startedAt, sourceBuffer, decodeTimeMs);
-  }
-
-  private async renderFastWithNative(
-    job: RenderJob,
-    startedAt: number,
-    sourceBuffer: Buffer,
-    decodeTimeMs: number,
-  ): Promise<RenderOutcome> {
-    const { configuration } = job.options;
-    if (!this.nativeBinaryPath) {
-      throw new Error('Native ffmpeg binary is not configured');
-    }
-
-    if (configuration.container !== 'mp4' || configuration.codec !== 'h264') {
-      throw new Error('Native fast pipeline only supports MP4/H.264 outputs');
-    }
-
-    const encodeStarted = performance.now();
-    const args = this.buildNativeFastArgs(job);
-    const native = spawn(this.nativeBinaryPath, args, { stdio: ['pipe', 'pipe', 'pipe'] });
-
-    const stdout = native.stdout;
-    const stdin = native.stdin;
-    const stderr = native.stderr;
-
-    if (!stdout || !stdin || !stderr) {
-      native.kill();
-      throw new Error('Native ffmpeg did not provide the expected stdio streams');
-    }
-
-    const stdoutChunks: Buffer[] = [];
-    const stderrChunks: string[] = [];
-
-    stdout.on('data', (chunk: Buffer) => {
-      stdoutChunks.push(chunk);
-    });
-
-    stderr.on('data', (chunk: Buffer) => {
-      stderrChunks.push(chunk.toString());
-    });
-
-    const completion = new Promise<void>((resolve, reject) => {
-      native.once('error', reject);
-      native.once('close', (code) => {
-        if (code === 0) {
-          resolve();
-        } else {
-          reject(new Error(`Native ffmpeg exited with code ${code}: ${stderrChunks.join('')}`));
-        }
-      });
-    });
-
-    stdin.end(sourceBuffer);
-
-    await completion;
-
-    const encodeTimeMs = performance.now() - encodeStarted;
-    const videoBuffer = Buffer.concat(stdoutChunks);
-
-    if (videoBuffer.length === 0) {
-      throw new Error('Native ffmpeg produced an empty output buffer');
-    }
-
-    let posterFrame: Buffer | null = null;
-    if (job.options.fallback.producePosterFrame) {
-      posterFrame = await this.extractPosterFrameNative(job, videoBuffer);
-    }
-
-    return {
-      fromCache: false,
-      metrics: {
-        decodeTimeMs,
-        renderTimeMs: 0,
-        encodeTimeMs,
-        totalTimeMs: performance.now() - startedAt,
-        outputSizeBytes: videoBuffer.byteLength,
-        averageFrameProcessingMs: 0,
-      },
-      result: {
-        video: videoBuffer,
-        container: configuration.container,
-        mimeType: this.resolveMimeType(configuration.container),
-        durationMs: job.metadata.durationMs,
-        frameRate: Math.min(configuration.frameRate, 30),
-        posterFrame: posterFrame ?? undefined,
-      },
-    } satisfies RenderOutcome;
-  }
-
-  private async renderFastWithWasm(
-    job: RenderJob,
-    startedAt: number,
-    sourceBuffer: Buffer,
-    decodeTimeMs: number,
-  ): Promise<RenderOutcome> {
-    await this.ensureFfmpegLoaded();
-
-    if (!this.ffmpeg) {
-      throw new Error('FFmpeg has not been initialised');
-    }
 
     const inputName = `input-${job.id}`;
     const outputName = `output-${job.id}.${job.options.configuration.container}`;
@@ -341,7 +216,7 @@ export class FFmpegAnimatedRendererService implements AnimatedRendererService {
     await this.ffmpeg.load();
   }
 
-  private async downloadSource(job: RenderJob): Promise<Buffer> {
+  private async downloadSource(job: RenderJob): Promise<Uint8Array> {
     if (job.source.type === 'frameSequence') {
       throw AppError.unsupported('animated-renderer.fast-pipeline.unsupported-source', 'Fast pipeline does not support frame sequences', {
         jobId: job.id,
@@ -358,7 +233,7 @@ export class FFmpegAnimatedRendererService implements AnimatedRendererService {
     }
 
     const arrayBuffer = await response.arrayBuffer();
-    return Buffer.from(arrayBuffer);
+    return new Uint8Array(arrayBuffer);
   }
 
   private async decodeSource(job: RenderJob): Promise<DecodedFrame[]> {
@@ -501,29 +376,6 @@ export class FFmpegAnimatedRendererService implements AnimatedRendererService {
     return container === 'mp4' ? 'video/mp4' : 'video/webm';
   }
 
-  private resolveNativeBinary(explicit?: string): string | undefined {
-    const candidates = [explicit, process.env['FFMPEG_PATH'], 'ffmpeg'].filter(
-      (value): value is string => typeof value === 'string' && value.length > 0,
-    );
-
-    for (const candidate of candidates) {
-      if (this.verifyNativeBinary(candidate)) {
-        return candidate;
-      }
-    }
-
-    return undefined;
-  }
-
-  private verifyNativeBinary(path: string): boolean {
-    try {
-      const result = spawnSync(path, ['-version'], { stdio: 'ignore' });
-      return result.status === 0;
-    } catch {
-      return false;
-    }
-  }
-
   private deriveTargetDimensions(job: RenderJob): { width: number; height: number } {
     const configured = job.options.configuration.dimensions;
     const maxWidth = 720;
@@ -589,44 +441,6 @@ export class FFmpegAnimatedRendererService implements AnimatedRendererService {
     ];
   }
 
-  private buildNativeFastArgs(job: RenderJob): string[] {
-    const { configuration } = job.options;
-    const { width, height } = this.deriveTargetDimensions(job);
-    const frameRate = Math.min(configuration.frameRate, 30);
-
-    return [
-      '-i',
-      'pipe:0',
-      '-an',
-      '-sn',
-      '-vf',
-      `fps=${frameRate},scale=${width}:${height}:flags=lanczos`,
-      '-c:v',
-      'libx264',
-      '-preset',
-      'veryfast',
-      '-tune',
-      'zerolatency',
-      '-profile:v',
-      'high',
-      '-pix_fmt',
-      'yuv420p',
-      '-b:v',
-      `${configuration.bitrate.targetKbps}k`,
-      '-maxrate',
-      `${configuration.bitrate.maxKbps}k`,
-      '-bufsize',
-      `${configuration.bitrate.maxKbps * 2}k`,
-      '-movflags',
-      '+faststart+frag_keyframe+empty_moov',
-      '-g',
-      String(Math.max(30, frameRate * 2)),
-      '-f',
-      'mp4',
-      'pipe:1',
-    ];
-  }
-
   private async extractPosterFrame(job: RenderJob, outputName: string): Promise<Buffer | null> {
     if (!this.ffmpeg) {
       return null;
@@ -643,61 +457,6 @@ export class FFmpegAnimatedRendererService implements AnimatedRendererService {
       return null;
     } finally {
       this.safeUnlink(posterName);
-    }
-  }
-
-  private async extractPosterFrameNative(job: RenderJob, videoBuffer: Buffer): Promise<Buffer | null> {
-    if (!this.nativeBinaryPath) {
-      return null;
-    }
-
-    const format = job.options.fallback.posterFormat;
-    const codec = format === 'png' ? 'png' : 'libwebp';
-
-    try {
-      const poster = spawn(
-        this.nativeBinaryPath,
-        ['-i', 'pipe:0', '-frames:v', '1', '-f', 'image2', '-vcodec', codec, 'pipe:1'],
-        { stdio: ['pipe', 'pipe', 'pipe'] },
-      );
-
-      const posterStdout = poster.stdout;
-      const posterStdin = poster.stdin;
-      const posterStderr = poster.stderr;
-
-      if (!posterStdout || !posterStdin || !posterStderr) {
-        poster.kill();
-        return null;
-      }
-
-      const chunks: Buffer[] = [];
-      const errors: string[] = [];
-
-      posterStdout.on('data', (chunk: Buffer) => {
-        chunks.push(chunk);
-      });
-
-      posterStderr.on('data', (chunk: Buffer) => {
-        errors.push(chunk.toString());
-      });
-
-      posterStdin.end(videoBuffer);
-
-      const result = await new Promise<Buffer>((resolve, reject) => {
-        poster.once('error', reject);
-        poster.once('close', (code) => {
-          if (code === 0) {
-            resolve(Buffer.concat(chunks));
-          } else {
-            reject(new Error(`Poster extraction failed with code ${code}: ${errors.join('')}`));
-          }
-        });
-      });
-
-      return result.length > 0 ? result : null;
-    } catch (error) {
-      this.logger.debug({ jobId: job.id, error }, 'Failed to extract poster frame via native ffmpeg');
-      return null;
     }
   }
 

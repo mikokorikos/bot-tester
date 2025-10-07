@@ -47,6 +47,5 @@ export interface RenderOptions {
   readonly performanceBudget: RenderPerformanceBudget;
   readonly fallback: RenderFallbackPolicy;
   readonly pipeline: RenderPipeline;
-  readonly preferNativeBinary: boolean;
   readonly cacheKey?: string;
 }

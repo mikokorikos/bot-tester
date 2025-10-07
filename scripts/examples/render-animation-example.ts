@@ -61,7 +61,6 @@ async function main() {
         frameDecimation: { enabled: true, minIntervalMs: 16, similarityThreshold: 0.985 },
       },
       pipeline: 'fast',
-      preferNativeBinary: true,
       performanceBudget: {
         maxRenderMs: 5_000,
         maxFileSizeBytes: 2_500_000,

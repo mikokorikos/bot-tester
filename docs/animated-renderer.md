@@ -10,7 +10,7 @@ graph TD
   B -->|Comando Validado| C(Domain Layer)
   C -->|RenderJob| D(Infrastructure: Animated Renderer)
   D -->|Video + Métricas| B
-  D -->|Transcode ultrarrápido| F[FFmpeg Core / Native Binary]
+  D -->|Transcode ultrarrápido| F[FFmpeg Core]
   D -->|Frames procesados| E[Worker Threads GPU/Canvas]
   D -->|Cache hit| G[(LRU Cache)]
   F -->|Video optimizado| H[CDN / Discord Upload]
@@ -29,7 +29,7 @@ graph TD
 
 ### Infraestructura (`src/infrastructure/animated-renderer`)
 - Implementación `FFmpegAnimatedRendererService` prioriza rendimiento:
-  1. **Fast-path**: transcodifica GIF/APNG/video → MP4/H.264 sin desempaquetar frames cuando no hay efectos ni alpha. Intenta usar un binario nativo (`ffmpeg`) con piping (`pipe:0 → pipe:1`) para evitar I/O virtual y completar en <400 ms; si no está disponible cae al motor WebAssembly con la misma configuración (`-preset veryfast`, `-tune zerolatency`).
+  1. **Fast-path**: transcodifica GIF/APNG/video → MP4/H.264 sin desempaquetar frames cuando no hay efectos ni alpha. Usa `-preset veryfast`, `-tune zerolatency` y bitrate adaptativo para completar en <1 s.
   2. **Ruta avanzada** *(opt-in)*: solo cuando se necesitan overlays, alpha o filtros. Decodifica frames y los procesa en pool de workers con `@napi-rs/canvas`.
   3. **Encoding**: `@ffmpeg/ffmpeg` + `@ffmpeg/core` emite MP4/H.264 (por defecto) o WebM/VP9 con `faststart`, loop infinito y bitrate objetivo.
   4. **Caching**: `MemoryCache` (LRU) en caliente, preparado para ampliarse a Redis/S3.
@@ -41,7 +41,6 @@ graph TD
 2. **Selección de pipeline**:
    - *Fast transcode (`pipeline: 'fast'`)*: FFmpeg convierte directamente a MP4 30 fps, con downscale ≤720p y bitrate ≤3 Mbps.
    - *Frame pipeline (`pipeline: 'quality'`)*: se decodifican frames cuando hay efectos/alpha avanzados.
-   - `preferNativeBinary: true` activa la detección automática de `ffmpeg` nativo; si no está presente se usa el runtime WASM sin intervención.
 3. **Frame decimation** *(ruta avanzada)* → similaridad >0.985 y delta <16 ms ⇒ frame descartado.
 4. **Frame processing pool** *(ruta avanzada)* → workers aplican efectos sin bloquear event-loop.
 5. **Encoding / mux** → MP4/H.264 (default) o WebM/VP9 con `faststart` y loop infinito.
@@ -81,8 +80,7 @@ Pruebas internas sobre GIF 512×288 @ 60 fps (Node 20, Ryzen 9 5950X).
 | Pipeline | Tiempo medio | Tamaño salida | Notas |
 |----------|--------------|---------------|-------|
 | GIF original | 0 ms (sin reprocesar) | 6.2 MB | Artefactos, 60 fps falsos, CPU alto en Discord. |
-| GIF → Fast MP4 H.264 (nativo) | 5 ms/frame (0.30 s total) | 1.5 MB | `ffmpeg` binario vía piping, 30 fps, sin frames intermedios. |
-| GIF → Fast MP4 H.264 (WASM) | 9 ms/frame (0.54 s total) | 1.7 MB | Fallback cuando no existe binario nativo, misma configuración. |
+| GIF → Fast MP4 H.264 | 9 ms/frame (0.54 s total) | 1.7 MB | Ruta predeterminada, `-preset veryfast`, 30 fps. |
 | GIF → WebM VP9 (avanzado) | 34 ms/frame (2.0 s total) | 2.0 MB | Solo cuando se requiere alpha/overlays. |
 | Cache hit | <5 ms | N/A | Se entrega buffer directo. |
 
