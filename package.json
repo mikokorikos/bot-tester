@@ -31,6 +31,7 @@
     "deploy:commands": "tsx scripts/deploy-commands.ts",
     "clear:commands": "tsx scripts/clear-commands.ts",
     "migrate:from-old": "tsx scripts/migrate-from-old-db.ts",
+    "media:harness": "tsx scripts/media-harness.ts",
     "docker:up": "docker-compose up -d",
     "docker:down": "docker-compose down",
     "prepare": "husky install",
